@@ -70,17 +70,25 @@ class ImportPLY(bpy.types.Operator, ImportHelper):
         ),
         type=bpy.types.OperatorFileListElement)
 
-    # Hide opertator properties, rest of this is managed in C. See WM_operator_properties_filesel().
-    hide_props_region: BoolProperty(
-        name="Hide Operator Properties",
-        description="Collapse the region displaying the operator settings",
-        default=True,
+    import_vertex_groups: BoolProperty(
+        name="Import Vertex Groups",
+        description="Enable, if float vertex properties of the ply file should be imported to vertex groups",
+        default=True
+    )
+
+    normalize_vertex_groups: BoolProperty(
+        name="Normalize Vertex Group Values",
+        description="If enabled, the vertex groups values will be mapped into the [0:1] range",
+        default=False
     )
 
     directory: StringProperty()
 
     filename_ext = ".ply"
     filter_glob: StringProperty(default="*.ply", options={'HIDDEN'})
+
+    def draw(self, context):
+        pass
 
     def execute(self, context):
         import os
@@ -93,9 +101,36 @@ class ImportPLY(bpy.types.Operator, ImportHelper):
         from . import import_ply
 
         for path in paths:
-            import_ply.load(self, context, path)
+            import_ply.load(self, context, path,
+                            self.import_vertex_groups, self.normalize_vertex_groups)
 
         return {'FINISHED'}
+
+class PLY_PT_import_geometry(bpy.types.Panel):
+    bl_space_type = 'FILE_BROWSER'
+    bl_region_type = 'TOOL_PROPS'
+    bl_label = "Geometry"
+    bl_parent_id = "FILE_PT_operator"
+
+    @classmethod
+    def poll(cls, context):
+        sfile = context.space_data
+        operator = sfile.active_operator
+
+        return operator.bl_idname == "IMPORT_MESH_OT_ply"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False  # No animation.
+
+        sfile = context.space_data
+        operator = sfile.active_operator
+        
+        layout.prop(operator, 'import_vertex_groups')
+        sub = layout.row()
+        sub.enabled = operator.import_vertex_groups
+        sub.prop(operator, 'normalize_vertex_groups')
 
 
 @orientation_helper(axis_forward='Y', axis_up='Z')
@@ -260,6 +295,7 @@ def menu_func_export(self, context):
 
 classes = (
     ImportPLY,
+    PLY_PT_import_geometry,
     ExportPLY,
     PLY_PT_export_include,
     PLY_PT_export_transform,

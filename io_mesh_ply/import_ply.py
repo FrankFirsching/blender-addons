@@ -224,11 +224,10 @@ def read(filepath):
 
     return obj_spec, obj, texture
 
-
-def load_ply_mesh(filepath, ply_name):
+    
+def load_ply_mesh(obj_spec, obj, texture, ply_name):
     import bpy
 
-    obj_spec, obj, texture = read(filepath)
     # XXX28: use texture
     if obj is None:
         print("Invalid file")
@@ -403,19 +402,60 @@ def load_ply_mesh(filepath, ply_name):
 
     return mesh
 
+def load_ply_object(obj_spec, obj_def, texture, ply_name, mesh, normalize_vertex_groups):
+    import bpy
+    obj = bpy.data.objects.new(ply_name, mesh)
 
-def load_ply(filepath):
+    vertex_groups = {}
+    for el in obj_spec.specs:
+        if el.name == b'vertex':
+            explicitelyKnownProperties=(b'x',b'y',b'z',b's',b't',b'red',b'green',b'blue',b'alpha')
+            for idx,p in enumerate(el.properties):
+                if not p.name in explicitelyKnownProperties:
+                    if p.numeric_type == 'f':
+                        group_name = p.name.decode("utf-8")
+                        obj.vertex_groups.new(name=group_name)
+                        vertex_groups[group_name] = idx
+                    else:
+                        print("Warning: Unsupported vertex group", p.name, "of type", p.numeric_type)
+
+    vertices = obj_def[b'vertex']
+    for group_name,idx in vertex_groups.items():
+        group = obj.vertex_groups[group_name]
+        if normalize_vertex_groups:
+            v_min=min(vertices, key=lambda k:k[idx])[idx]
+            v_max=max(vertices, key=lambda k:k[idx])[idx]
+            print(v_min, v_max)
+            for v_idx,v in enumerate(vertices):
+                weight = (v[idx]-v_min)/(v_max-v_min)
+                if weight>0:
+                    group.add([v_idx], weight, "REPLACE")
+        else:
+            # We don't have a foreach_set on the vertex group, so we have to set them one by one
+            for v_idx,v in enumerate(vertices):
+                weight = v[idx]
+                if weight>0:
+                    group.add([v_idx], weight, "REPLACE")
+
+    return obj
+
+def load_ply(filepath, import_vertex_groups, normalize_vertex_groups):
     import time
     import bpy
 
     t = time.time()
     ply_name = bpy.path.display_name_from_filepath(filepath)
 
-    mesh = load_ply_mesh(filepath, ply_name)
+    obj_spec, obj_def, texture = read(filepath)
+
+    mesh = load_ply_mesh(obj_spec, obj_def, texture, ply_name)
     if not mesh:
         return {'CANCELLED'}
 
-    obj = bpy.data.objects.new(ply_name, mesh)
+    if import_vertex_groups:
+        obj = load_ply_object(obj_spec, obj_def, texture, ply_name, mesh, normalize_vertex_groups)
+    else:
+        obj = bpy.data.objects.new(ply_name, mesh)
     bpy.context.collection.objects.link(obj)
     bpy.context.view_layer.objects.active = obj
     obj.select_set(True)
@@ -424,5 +464,5 @@ def load_ply(filepath):
     return {'FINISHED'}
 
 
-def load(operator, context, filepath=""):
-    return load_ply(filepath)
+def load(operator, context, filepath="", import_vertex_groups=True, normalize_vertex_groups=False):
+    return load_ply(filepath, import_vertex_groups, normalize_vertex_groups)
