@@ -233,8 +233,9 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
         print("Invalid file")
         return
 
-    uvindices = colindices = None
-    colmultiply = None
+    uvindices = None
+    colindices = {}
+    colmultiply = {}
 
     # TODO import normals
     # noindices = None
@@ -248,16 +249,16 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
             if -1 in uvindices:
                 uvindices = None
             # ignore alpha if not present
-            if el.index(b'alpha') == -1:
-                colindices = el.index(b'red'), el.index(b'green'), el.index(b'blue')
-            else:
-                colindices = el.index(b'red'), el.index(b'green'), el.index(b'blue'), el.index(b'alpha')
-            if -1 in colindices:
-                if any(idx > -1 for idx in colindices):
-                    print("Warning: At least one obligatory color channel is missing, ignoring vertex colors.")
-                colindices = None
-            else:  # if not a float assume uchar
-                colmultiply = [1.0 if el.properties[i].numeric_type in {'f', 'd'} else (1.0 / 255.0) for i in colindices]
+            rgb_idx = el.index(b'red'), el.index(b'green'), el.index(b'blue')
+            if all(idx>-1 for idx in rgb_idx):
+                if el.index(b'alpha') == -1:
+                    colindices['Col'] = rgb_idx
+                else:
+                    colindices['Col'] = rgb_idx+(el.index(b'alpha'),)
+                # if not a float assume uchar
+                colmultiply['Col'] = [1.0 if el.properties[i].numeric_type in {'f', 'd'} else (1.0 / 255.0) for i in colindices['Col']]
+            elif any(idx > -1 for idx in rgb_idx):
+                print("Warning: At least one obligatory color channel is missing, ignoring vertex colors.")
 
         elif el.name == b'face':
             findex = el.index(b'vertex_indices')
@@ -268,30 +269,33 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
 
     mesh_faces = []
     mesh_uvs = []
-    mesh_colors = []
+    mesh_colors = {k:[] for k in colindices.keys()}
 
-    def add_face(vertices, indices, uvindices, colindices):
+    def add_face(vertices, indices, uvindices, colindices, colmultiply):
         mesh_faces.append(indices)
         if uvindices:
             mesh_uvs.extend([(vertices[index][uvindices[0]], vertices[index][uvindices[1]]) for index in indices])
-        if colindices:
-            if len(colindices) == 3:
-                mesh_colors.extend([
+        for name in colindices:
+            cindices = colindices[name]
+            cmultiply = colmultiply[name]
+            m_colors = mesh_colors[name]
+            if len(cindices) == 3:
+                m_colors.extend([
                     (
-                       vertices[index][colindices[0]] * colmultiply[0],
-                       vertices[index][colindices[1]] * colmultiply[1],
-                       vertices[index][colindices[2]] * colmultiply[2],
+                       vertices[index][cindices[0]] * cmultiply[0],
+                       vertices[index][cindices[1]] * cmultiply[1],
+                       vertices[index][cindices[2]] * cmultiply[2],
                        1.0
                     )
                     for index in indices
                 ])
-            elif len(colindices) == 4:
-                mesh_colors.extend([
+            elif len(cindices) == 4:
+                m_colors.extend([
                     (
-                       vertices[index][colindices[0]] * colmultiply[0],
-                       vertices[index][colindices[1]] * colmultiply[1],
-                       vertices[index][colindices[2]] * colmultiply[2],
-                       vertices[index][colindices[3]] * colmultiply[3],
+                       vertices[index][cindices[0]] * cmultiply[0],
+                       vertices[index][cindices[1]] * cmultiply[1],
+                       vertices[index][cindices[2]] * cmultiply[2],
+                       vertices[index][cindices[3]] * cmultiply[3],
                     )
                     for index in indices
                 ])
@@ -301,7 +305,7 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
         add_face_simple = add_face
 
         # EVIL EEKADOODLE - face order annoyance.
-        def add_face(vertices, indices, uvindices, colindices):
+        def add_face(vertices, indices, uvindices, colindices, colmultiply):
             if len(indices) == 4:
                 if indices[2] == 0 or indices[3] == 0:
                     indices = indices[2], indices[3], indices[0], indices[1]
@@ -309,21 +313,21 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
                 if indices[2] == 0:
                     indices = indices[1], indices[2], indices[0]
 
-            add_face_simple(vertices, indices, uvindices, colindices)
+            add_face_simple(vertices, indices, uvindices, colindices, colmultiply)
 
     verts = obj[b'vertex']
 
     if b'face' in obj:
         for f in obj[b'face']:
             ind = f[findex]
-            add_face(verts, ind, uvindices, colindices)
+            add_face(verts, ind, uvindices, colindices, colmultiply)
 
     if b'tristrips' in obj:
         for t in obj[b'tristrips']:
             ind = t[trindex]
             len_ind = len(ind)
             for j in range(len_ind - 2):
-                add_face(verts, (ind[j], ind[j + 1], ind[j + 2]), uvindices, colindices)
+                add_face(verts, (ind[j], ind[j + 1], ind[j + 2]), uvindices, colindices, colmultiply)
 
     mesh = bpy.data.meshes.new(name=ply_name)
 
@@ -359,14 +363,14 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
             for i, uv in enumerate(uv_layer.data):
                 uv.uv = mesh_uvs[i]
 
-        if colindices:
-            vcol_lay = mesh.vertex_colors.new()
-
+        for name in colindices:
+            vcol_lay = mesh.vertex_colors.new(name=name)
+            m_colors = mesh_colors[name]
             for i, col in enumerate(vcol_lay.data):
-                col.color[0] = mesh_colors[i][0]
-                col.color[1] = mesh_colors[i][1]
-                col.color[2] = mesh_colors[i][2]
-                col.color[3] = mesh_colors[i][3]
+                col.color[0] = m_colors[i][0]
+                col.color[1] = m_colors[i][1]
+                col.color[2] = m_colors[i][2]
+                col.color[3] = m_colors[i][3]
 
     mesh.update()
     mesh.validate()
@@ -425,7 +429,7 @@ def load_ply_object(obj_spec, obj_def, texture, ply_name, mesh, normalize_vertex
         if normalize_vertex_groups:
             v_min=min(vertices, key=lambda k:k[idx])[idx]
             v_max=max(vertices, key=lambda k:k[idx])[idx]
-            print(v_min, v_max)
+            # We don't have a foreach_set on the vertex group, so we have to set them one by one
             for v_idx,v in enumerate(vertices):
                 weight = (v[idx]-v_min)/(v_max-v_min)
                 if weight>0:
