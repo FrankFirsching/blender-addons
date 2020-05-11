@@ -55,6 +55,9 @@ class PropertySpec:
         self.list_type = list_type
         self.numeric_type = numeric_type
 
+    def is_custom_property(self):
+        return self.name not in (b'x',b'y',b'z',b's',b't',b'red',b'green',b'blue',b'alpha')
+
     def read_format(self, format, count, num_type, stream):
         import struct
 
@@ -224,8 +227,19 @@ def read(filepath):
 
     return obj_spec, obj, texture
 
-    
-def load_ply_mesh(obj_spec, obj, texture, ply_name):
+def color_factor(properties_type):
+    return {
+        'f': 1.0,
+        'd': 1.0,
+        'b': 1.0/128.0,
+        'B': 1.0/255.0,
+        'h': 1.0/32767.0,
+        'H': 1.0/65535.0,
+        'i': 1.0/2147483647.0,
+        'I': 1.0/4294967295.0
+        }.get(properties_type, 1.0)
+
+def load_ply_mesh(obj_spec, obj, texture, ply_name, import_custom_vertex_colors):
     import bpy
 
     # XXX28: use texture
@@ -255,10 +269,29 @@ def load_ply_mesh(obj_spec, obj, texture, ply_name):
                     colindices['Col'] = rgb_idx
                 else:
                     colindices['Col'] = rgb_idx+(el.index(b'alpha'),)
-                # if not a float assume uchar
-                colmultiply['Col'] = [1.0 if el.properties[i].numeric_type in {'f', 'd'} else (1.0 / 255.0) for i in colindices['Col']]
             elif any(idx > -1 for idx in rgb_idx):
                 print("Warning: At least one obligatory color channel is missing, ignoring vertex colors.")
+
+            if import_custom_vertex_colors:
+                for idx,p in enumerate(el.properties):
+                    group_name = p.name.decode("utf-8")
+                    if p.is_custom_property() and group_name[-1].isdigit():
+                        base_name = group_name[0:-1]
+                        digit = int(group_name[-1])
+                        cindices = []
+                        if base_name in colindices:
+                            cindices = colindices[base_name]
+                        else:
+                            colindices[base_name] = cindices
+                        # Resize the list to accomodate at least digit elements
+                        cindices.extend([None]*(digit-len(cindices)))
+                        # counting is 1-based for the color names
+                        cindices[digit-1] = idx
+            
+            # Filter out the colindices, that still have None in them
+            colindices = {k:v for k,v in colindices.items() if not any(idx==None for idx in v)}
+            for name in colindices:
+                colmultiply[name] = [color_factor(el.properties[i].numeric_type) for i in colindices[name] ]
 
         elif el.name == b'face':
             findex = el.index(b'vertex_indices')
@@ -413,11 +446,10 @@ def load_ply_object(obj_spec, obj_def, texture, ply_name, mesh, normalize_vertex
     vertex_groups = {}
     for el in obj_spec.specs:
         if el.name == b'vertex':
-            explicitelyKnownProperties=(b'x',b'y',b'z',b's',b't',b'red',b'green',b'blue',b'alpha')
             for idx,p in enumerate(el.properties):
-                if not p.name in explicitelyKnownProperties:
+                group_name = p.name.decode("utf-8")
+                if p.is_custom_property() and not group_name[-1].isdigit():
                     if p.numeric_type == 'f':
-                        group_name = p.name.decode("utf-8")
                         obj.vertex_groups.new(name=group_name)
                         vertex_groups[group_name] = idx
                     else:
@@ -443,7 +475,7 @@ def load_ply_object(obj_spec, obj_def, texture, ply_name, mesh, normalize_vertex
 
     return obj
 
-def load_ply(filepath, import_vertex_groups, normalize_vertex_groups):
+def load_ply(filepath, import_vertex_groups, normalize_vertex_groups, import_custom_vertex_colors):
     import time
     import bpy
 
@@ -452,7 +484,7 @@ def load_ply(filepath, import_vertex_groups, normalize_vertex_groups):
 
     obj_spec, obj_def, texture = read(filepath)
 
-    mesh = load_ply_mesh(obj_spec, obj_def, texture, ply_name)
+    mesh = load_ply_mesh(obj_spec, obj_def, texture, ply_name, import_custom_vertex_colors)
     if not mesh:
         return {'CANCELLED'}
 
@@ -468,5 +500,5 @@ def load_ply(filepath, import_vertex_groups, normalize_vertex_groups):
     return {'FINISHED'}
 
 
-def load(operator, context, filepath="", import_vertex_groups=True, normalize_vertex_groups=False):
-    return load_ply(filepath, import_vertex_groups, normalize_vertex_groups)
+def load(operator, context, filepath="", import_vertex_groups=True, normalize_vertex_groups=False, import_custom_vertex_colors=True):
+    return load_ply(filepath, import_vertex_groups, normalize_vertex_groups, import_custom_vertex_colors)

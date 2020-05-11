@@ -82,6 +82,12 @@ class ImportPLY(bpy.types.Operator, ImportHelper):
         default=False
     )
 
+    import_custom_vertex_colors: BoolProperty(
+        name="Import custom Vertex Colors",
+        description="If enabled, import custom Vertex Colors using numbered properties (e.g. myCol1,myCol2,myCol3)",
+        default=True
+    )
+
     directory: StringProperty()
 
     filename_ext = ".ply"
@@ -102,7 +108,8 @@ class ImportPLY(bpy.types.Operator, ImportHelper):
 
         for path in paths:
             import_ply.load(self, context, path,
-                            self.import_vertex_groups, self.normalize_vertex_groups)
+                            self.import_vertex_groups, self.normalize_vertex_groups,
+                            self.import_custom_vertex_colors)
 
         return {'FINISHED'}
 
@@ -131,6 +138,7 @@ class PLY_PT_import_geometry(bpy.types.Panel):
         sub = layout.row()
         sub.enabled = operator.import_vertex_groups
         sub.prop(operator, 'normalize_vertex_groups')
+        layout.prop(operator, 'import_custom_vertex_colors')
 
 
 @orientation_helper(axis_forward='Y', axis_up='Z')
